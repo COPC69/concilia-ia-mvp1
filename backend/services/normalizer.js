@@ -33,32 +33,75 @@ function parseNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseDate(value, fallbackYear = null) {
+function isValidDateParts(year, month, day) {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  if (!y || m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
+function toIsoDate(year, month, day) {
+  if (!isValidDateParts(year, month, day)) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function parseDate(value, fallbackYear = null, fallbackMonth = null) {
   if (!value) return null;
   if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
 
   const s = String(value).trim();
   if (!s) return null;
 
-  // ISO o yyyy-mm-dd
+  // ISO o yyyy-mm-dd / yyyy/mm/dd
   const iso = s.match(/(20\d{2}|19\d{2})[-/](\d{1,2})[-/](\d{1,2})/);
   if (iso) {
     const [, y, m, d] = iso;
-    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    return toIsoDate(Number(y), Number(m), Number(d));
   }
 
-  // dd/mm/yyyy o dd-mm-yyyy
-  const latam = s.match(/(\d{1,2})[-/](\d{1,2})[-/](20\d{2}|19\d{2})/);
-  if (latam) {
-    const [, d, m, y] = latam;
-    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  // Fechas con año: pueden venir como DD/MM/YYYY o MM/DD/YYYY según cómo Excel exportó el archivo.
+  // Si el mes del archivo se puede inferir, se usa para desambiguar. Esto corrige auxiliares
+  // contables que traen 02/28/2026 para febrero, mientras el banco trae 28/02 sin año.
+  const withYear = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](20\d{2}|19\d{2})$/);
+  if (withYear) {
+    const a = Number(withYear[1]);
+    const b = Number(withYear[2]);
+    const y = Number(withYear[3]);
+    const fm = Number(fallbackMonth || 0);
+
+    let day;
+    let month;
+
+    if (fm && a === fm && b !== fm) {
+      // MM/DD/YYYY
+      month = a;
+      day = b;
+    } else if (fm && b === fm) {
+      // DD/MM/YYYY
+      day = a;
+      month = b;
+    } else if (a > 12 && b <= 12) {
+      day = a;
+      month = b;
+    } else if (b > 12 && a <= 12) {
+      month = a;
+      day = b;
+    } else {
+      // Preferencia latinoamericana cuando no hay forma de saberlo.
+      day = a;
+      month = b;
+    }
+
+    return toIsoDate(y, month, day);
   }
 
   // Extractos Bancolombia suelen traer fechas tipo d/mm sin año. Usar año inferido.
   const noYear = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
   if (noYear && fallbackYear) {
     const [, d, m] = noYear;
-    return `${fallbackYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    return toIsoDate(Number(fallbackYear), Number(m), Number(d));
   }
 
   const d = new Date(s);
@@ -82,12 +125,29 @@ function isTotalOrHeaderLike(row) {
 
 function detectBankExpense(description) {
   const d = normalizeText(description);
-  const keys = [
-    '4x1000', '4 x 1000', 'gmf', 'impto gobierno', 'impuesto gobierno',
-    'comision', 'comisión', 'cuota manejo', 'iva', 'intereses', 'interes',
-    'retencion', 'retención', 'cobro', 'cargo bancario', 'gasto bancario'
+  if (!d) return false;
+
+  const patterns = [
+    /\b4x1000\b/,
+    /\b4\s*x\s*1000\b/,
+    /\bgmf\b/,
+    /impto gobierno/,
+    /impuesto gobierno/,
+    /\bcomis(?:ion)?\b/,
+    /\bcomision\b/,
+    /\bcuota manejo\b/,
+    /\biva\b/,
+    /\bintereses\b/,
+    /\binteres\b/,
+    /\bretencion\b/,
+    /\bretencion fuente\b/,
+    /\bcargo bancario\b/,
+    /\bgasto bancario\b/,
+    /rev\.?aut cuota manejo/,
+    /abono desembolso de credito/
   ];
-  return keys.some(k => d.includes(normalizeText(k)));
+
+  return patterns.some(p => p.test(d));
 }
 
 function normalizeDataset(parsed, { role }) {
@@ -107,9 +167,12 @@ function normalizeDataset(parsed, { role }) {
   let sequence = 1;
 
   for (const row of sheet.rows) {
-    if (isTotalOrHeaderLike(row)) continue;
+    // En archivos internos sí saltamos filas de totales/subtotales antes de procesar.
+    // En extractos bancarios NO lo hacemos aquí, porque algunas descripciones o filas reales
+    // pueden contener textos que disparen falsos positivos. Primero validamos fecha + valor.
+    if (role !== 'bank' && isTotalOrHeaderLike(row)) continue;
 
-    const date = parseDate(row[mapping.date], row.__defaultYear || sheet.defaultYear || null);
+    const date = parseDate(row[mapping.date], row.__defaultYear || sheet.defaultYear || null, row.__defaultMonth || sheet.defaultMonth || null);
     const description = String(row[mapping.description] ?? '').trim();
     const reference = mapping.reference ? String(row[mapping.reference] ?? '').trim() : '';
     const balance = mapping.balance ? parseNumber(row[mapping.balance]) : null;
@@ -143,6 +206,14 @@ function normalizeDataset(parsed, { role }) {
     // Débitos/Créditos pero no fecha ni detalle, y duplicaba el neto interno.
     if (!date) continue;
     if (rawValue === 0) continue;
+
+    // En banco, después de validar fecha y valor, sí descartamos filas claramente informativas.
+    // Esto evita perder movimientos reales como pagos grandes de terceros.
+    if (role === 'bank') {
+      const rowText = normalizeText(Object.values(row).join(' '));
+      if (/saldo anterior|saldo inicial|total abonos|total cargos|resumen/.test(rowText)) continue;
+    }
+
     if (role === 'internal' && !description) continue;
 
     const movement = {
