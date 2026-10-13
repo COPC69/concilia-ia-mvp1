@@ -1,7 +1,9 @@
+const DEFAULT_API_BASE_URL = 'https://concilia-ia-api.onrender.com';
+
 const state = {
-  apiBaseUrl: localStorage.getItem('concilia_api_url') || '',
+  apiBaseUrl: localStorage.getItem('concilia_api_url') || DEFAULT_API_BASE_URL,
   result: null,
-  activeTab: 'inconsistencies'
+  activeTab: 'reviewFirst'
 };
 
 const $ = (id) => document.getElementById(id);
@@ -12,6 +14,7 @@ const processStatus = $('processStatus');
 const resultsSection = $('resultsSection');
 const summaryGrid = $('summaryGrid');
 const tabContent = $('tabContent');
+const resultMessage = $('resultMessage');
 
 apiUrlInput.value = state.apiBaseUrl;
 
@@ -45,16 +48,24 @@ function downloadText(filename, content, mime = 'text/plain;charset=utf-8') {
   URL.revokeObjectURL(url);
 }
 
+function getAmountTolerance() {
+  return Number($('amountTolerance')?.value || 2);
+}
+
+function getCriticalThreshold() {
+  return Number($('criticalThreshold')?.value || 1000000);
+}
+
 $('saveApiBtn').addEventListener('click', () => {
   const url = cleanApiUrl(apiUrlInput.value);
-  state.apiBaseUrl = url;
-  localStorage.setItem('concilia_api_url', url);
+  state.apiBaseUrl = url || DEFAULT_API_BASE_URL;
+  localStorage.setItem('concilia_api_url', state.apiBaseUrl);
   setStatus(apiStatus, 'URL guardada.', 'ok');
 });
 
 $('testApiBtn').addEventListener('click', async () => {
   try {
-    const url = cleanApiUrl(apiUrlInput.value);
+    const url = cleanApiUrl(apiUrlInput.value || state.apiBaseUrl);
     if (!url) throw new Error('Pega primero la URL de Render.');
     setStatus(apiStatus, 'Probando backend...', 'muted');
     const res = await fetch(`${url}/health`);
@@ -84,8 +95,8 @@ $('resetBtn').addEventListener('click', () => {
 
 $('reconcileBtn').addEventListener('click', async () => {
   try {
-    const url = cleanApiUrl(apiUrlInput.value || state.apiBaseUrl);
-    if (!url) throw new Error('Primero configura la URL del backend Render.');
+    const url = cleanApiUrl(state.apiBaseUrl || apiUrlInput.value || DEFAULT_API_BASE_URL);
+    if (!url) throw new Error('No hay URL de backend configurada.');
 
     const bankFile = $('bankFile').files[0];
     const internalFile = $('internalFile').files[0];
@@ -106,7 +117,7 @@ $('reconcileBtn').addEventListener('click', async () => {
     if (!res.ok || !data.ok) throw new Error(data.error || 'Error procesando conciliación.');
 
     state.result = data;
-    state.activeTab = 'inconsistencies';
+    state.activeTab = 'reviewFirst';
     renderResults();
     setStatus(processStatus, 'Conciliación procesada correctamente.', 'ok');
   } catch (err) {
@@ -117,26 +128,70 @@ $('reconcileBtn').addEventListener('click', async () => {
   }
 });
 
-function kpi(label, value) {
-  return `<div class="kpi"><small>${label}</small><strong>${value}</strong></div>`;
+function kpi(label, value, variant = '') {
+  return `<div class="kpi ${variant}"><small>${label}</small><strong>${value}</strong></div>`;
+}
+
+function getMovementValue(m) {
+  return Math.abs(Number(m?.value || 0));
+}
+
+function isBankExpenseItem(x) {
+  return x?.status === 'gasto_bancario_detectado';
+}
+
+function getResultParts() {
+  const r = state.result?.result || {};
+  const threshold = getCriticalThreshold();
+  const bankOnly = (r.bankOnly || []).filter(x => !isBankExpenseItem(x));
+  const internalOnly = r.internalOnly || [];
+
+  const criticalBank = bankOnly.filter(x => getMovementValue(x.bank) >= threshold);
+  const criticalInternal = internalOnly.filter(x => getMovementValue(x.internal) >= threshold);
+  const minorBank = bankOnly.filter(x => getMovementValue(x.bank) < threshold);
+  const minorInternal = internalOnly.filter(x => getMovementValue(x.internal) < threshold);
+
+  return {
+    criticalBank,
+    criticalInternal,
+    critical: [...criticalBank, ...criticalInternal],
+    minorBank,
+    minorInternal,
+    minor: [...minorBank, ...minorInternal],
+    probable: r.probable || [],
+    bankExpenses: r.bankExpenses || [],
+    matches: r.matches || []
+  };
+}
+
+function getCloseStatus(summary) {
+  const diff = Number(summary.diferenciaNeta || 0);
+  const tolerance = getAmountTolerance();
+  return {
+    netOk: Math.abs(diff) <= Math.max(tolerance, 2),
+    diff
+  };
 }
 
 function renderResults() {
   if (!state.result) return;
   const s = state.result.result.summary;
+  const parts = getResultParts();
+  const close = getCloseStatus(s);
   resultsSection.classList.remove('hidden');
 
-  const inconsistenciasCriticas = (s.bancoSinRegistroInterno ?? 0) + (s.registroInternoSinBanco ?? 0);
-  const inconsistenciasRevision = inconsistenciasCriticas + (s.coincidenciasProbables ?? 0) + (s.gastosBancariosDetectados ?? s.bankExpenses ?? 0);
+  resultMessage.innerHTML = close.netOk
+    ? `<div class="success-panel"><strong>Cierre neto cuadrado.</strong><br>La diferencia neta es ${formatMoney(close.diff)}. No debes revisar todo: empieza por las partidas de alto valor en “Revisar primero”.</div>`
+    : `<div class="priority-panel"><strong>Atención: diferencia neta significativa.</strong><br>La diferencia neta es ${formatMoney(close.diff)}. Revisa primero las partidas críticas y el diagnóstico de lectura.</div>`;
 
   summaryGrid.innerHTML = [
-    kpi('Inconsistencias a revisar', inconsistenciasRevision),
-    kpi('Banco sin registro interno', s.bancoSinRegistroInterno ?? 0),
-    kpi('Interno sin banco', s.registroInternoSinBanco ?? 0),
-    kpi('Coincidencias por aprobar', s.coincidenciasProbables ?? 0),
-    kpi('Gastos bancarios detectados', s.gastosBancariosDetectados ?? s.bankExpenses ?? 0),
-    kpi('Diferencia neta', formatMoney(s.diferenciaNeta ?? 0)),
-    kpi('Conciliados exactos', s.conciliadosExactos ?? 0),
+    kpi('Estado del cierre', close.netOk ? 'Neto cuadrado' : 'Con diferencia', close.netOk ? 'good-kpi' : 'bad-kpi'),
+    kpi('Diferencia neta', formatMoney(s.diferenciaNeta ?? 0), close.netOk ? 'good-kpi' : 'bad-kpi'),
+    kpi('Revisar primero', parts.critical.length, parts.critical.length ? 'bad-kpi' : 'good-kpi'),
+    kpi('Confirmar sugerencias', parts.probable.length),
+    kpi('Pendientes menores', parts.minor.length),
+    kpi('Gastos bancarios informativos', parts.bankExpenses.length),
+    kpi('Conciliados automáticos', s.conciliadosExactos ?? 0, 'good-kpi'),
     kpi('% banco conciliado', `${s.porcentajeBancoConciliado ?? 0}%`),
     kpi('% interno conciliado', `${s.porcentajeInternoConciliado ?? 0}%`),
     kpi('Mov. banco', s.bankMovements ?? 0),
@@ -154,8 +209,9 @@ function renderResults() {
 function badge(status) {
   let cls = 'warn';
   if (/exacto|conciliado/.test(status)) cls = 'good';
-  if (/sin|diferencia|revision|bancario/.test(status)) cls = 'bad';
-  return `<span class="badge-status ${cls}">${status.replaceAll('_', ' ')}</span>`;
+  if (/sin|diferencia|revision/.test(status)) cls = 'bad';
+  if (/bancario/.test(status)) cls = 'info';
+  return `<span class="badge-status ${cls}">${String(status || '').replaceAll('_', ' ')}</span>`;
 }
 
 function movementCells(m) {
@@ -168,7 +224,7 @@ function movementCells(m) {
 }
 
 function renderMatchTable(items) {
-  if (!items.length) return '<p class="muted">No hay registros en esta categoría.</p>';
+  if (!items.length) return '<p class="muted empty-state">No hay registros en esta categoría.</p>';
   return `
     <table>
       <thead>
@@ -191,75 +247,28 @@ function renderMatchTable(items) {
     </table>`;
 }
 
-function buildInconsistencyRows() {
-  if (!state.result) return [];
-  const r = state.result.result;
-  const rows = [];
-
-  (r.bankOnly || [])
-    .filter(x => x.status !== 'gasto_bancario_detectado')
-    .forEach(x => rows.push({
-      prioridad: 'Alta',
-      tipo: 'Movimiento bancario sin registro interno',
-      origen: 'Banco',
-      movimiento: x.bank,
-      accion: 'Revisar si falta contabilizar, si es personal, duplicado o si pertenece a otro periodo.'
-    }));
-
-  (r.internalOnly || []).forEach(x => rows.push({
-    prioridad: 'Alta',
-    tipo: 'Registro interno sin movimiento bancario',
-    origen: 'Archivo interno',
-    movimiento: x.internal,
-    accion: 'Revisar si fue registrado en CONTAI pero no pasó por Bancolombia, si está en otra cuenta o si es error contable.'
-  }));
-
-  (r.probable || []).forEach(x => rows.push({
-    prioridad: 'Media',
-    tipo: 'Coincidencia probable por aprobar',
-    origen: 'Banco + interno',
-    movimiento: x.bank,
-    interno: x.internal,
-    score: x.score,
-    accion: 'Aprobar o rechazar la coincidencia sugerida.'
-  }));
-
-  (r.bankExpenses || [])
-    .filter(x => x.status === 'gasto_bancario_detectado')
-    .forEach(x => rows.push({
-      prioridad: 'Media',
-      tipo: 'Gasto bancario detectado',
-      origen: 'Banco',
-      movimiento: x.bank,
-      accion: 'Validar si debe registrarse como gasto bancario o si ya está agrupado en contabilidad.'
-    }));
-
-  const order = { Alta: 1, Media: 2, Baja: 3 };
-  rows.sort((a, b) => (order[a.prioridad] || 9) - (order[b.prioridad] || 9));
-  return rows;
+function priorityTag(label) {
+  return `<span class="priority ${label.toLowerCase()}">${label}</span>`;
 }
 
-function renderInconsistencies() {
-  const rows = buildInconsistencyRows();
+function renderReviewRows(rows, title, note) {
   if (!rows.length) {
-    return '<div class="success-panel"><strong>No se encontraron inconsistencias pendientes.</strong><br>Los archivos quedaron conciliados según las reglas actuales.</div>';
+    return `<div class="success-panel"><strong>${title}</strong><br>No hay partidas en esta categoría.</div>`;
   }
-
   return `
     <div class="priority-panel">
-      <strong>Primero revisar estas inconsistencias.</strong><br>
-      Esta es la bandeja principal de trabajo: movimientos del banco sin soporte interno, registros internos sin banco, coincidencias por aprobar y gastos bancarios detectados.
+      <strong>${title}</strong><br>${note}
     </div>
     <table>
       <thead>
         <tr>
-          <th>Prioridad</th><th>Tipo de inconsistencia</th><th>Origen</th><th>Fecha</th><th>Descripción</th><th>Valor</th><th>Acción sugerida</th>
+          <th>Prioridad</th><th>Tipo</th><th>Origen</th><th>Fecha</th><th>Descripción</th><th>Valor</th><th>Acción sugerida</th>
         </tr>
       </thead>
       <tbody>
         ${rows.map(x => `
           <tr>
-            <td><span class="priority ${x.prioridad.toLowerCase()}">${x.prioridad}</span></td>
+            <td>${priorityTag(x.prioridad)}</td>
             <td>${x.tipo}${x.score ? `<br><small>Score: ${x.score}</small>` : ''}</td>
             <td>${x.origen}</td>
             <td>${formatDate(x.movimiento?.date)}</td>
@@ -269,6 +278,66 @@ function renderInconsistencies() {
           </tr>`).join('')}
       </tbody>
     </table>`;
+}
+
+function buildCriticalRows() {
+  const rows = [];
+  const parts = getResultParts();
+
+  parts.criticalBank.forEach(x => rows.push({
+    prioridad: 'Alta',
+    tipo: 'Banco sin registro interno',
+    origen: 'Banco',
+    movimiento: x.bank,
+    accion: 'Revisar si falta contabilizar, si pertenece a otra cuenta, si es personal o si está agrupado en CONTAI.'
+  }));
+
+  parts.criticalInternal.forEach(x => rows.push({
+    prioridad: 'Alta',
+    tipo: 'Interno sin movimiento bancario',
+    origen: 'Archivo interno',
+    movimiento: x.internal,
+    accion: 'Revisar si el registro contable pasó por otra cuenta, otro periodo o si debe reversarse/corregirse.'
+  }));
+
+  rows.sort((a, b) => getMovementValue(b.movimiento) - getMovementValue(a.movimiento));
+  return rows;
+}
+
+function buildMinorRows() {
+  const rows = [];
+  const parts = getResultParts();
+
+  parts.minorBank.forEach(x => rows.push({
+    prioridad: 'Baja',
+    tipo: 'Banco sin registro interno menor',
+    origen: 'Banco',
+    movimiento: x.bank,
+    accion: 'Revisar después de las partidas críticas. Puede ser agrupación, gasto menor o movimiento de bajo impacto.'
+  }));
+
+  parts.minorInternal.forEach(x => rows.push({
+    prioridad: 'Baja',
+    tipo: 'Interno sin banco menor',
+    origen: 'Archivo interno',
+    movimiento: x.internal,
+    accion: 'Revisar después de las partidas críticas. Puede estar agrupado, redondeado o en otra cuenta.'
+  }));
+
+  rows.sort((a, b) => getMovementValue(b.movimiento) - getMovementValue(a.movimiento));
+  return rows;
+}
+
+function buildConfirmRows() {
+  return getResultParts().probable.map(x => ({
+    prioridad: 'Media',
+    tipo: 'Coincidencia probable por aprobar',
+    origen: 'Banco + interno',
+    movimiento: x.bank,
+    interno: x.internal,
+    score: x.score,
+    accion: 'Aprobar si corresponde al mismo movimiento. Si no, rechazar y revisar por separado.'
+  }));
 }
 
 function renderDiagnostics() {
@@ -290,7 +359,7 @@ function renderDiagnostics() {
 
   return `
     <div class="diagnostics-note">
-      <strong>Lectura de control:</strong> estos totales sirven para validar si los dos archivos fueron interpretados correctamente antes de revisar movimientos uno a uno.
+      <strong>Lectura de control:</strong> estos totales validan si ambos archivos fueron interpretados correctamente antes de revisar movimiento por movimiento.
     </div>
     <table>
       <thead><tr><th>Concepto</th><th>Valor</th></tr></thead>
@@ -298,15 +367,18 @@ function renderDiagnostics() {
     </table>`;
 }
 
-function renderSingleTable(items, source) {
-  if (!items.length) return '<p class="muted">No hay registros en esta categoría.</p>';
+function renderSingleTable(items, source, mode = 'default') {
+  if (!items.length) return '<p class="muted empty-state">No hay registros en esta categoría.</p>';
   return `
     <table>
-      <thead><tr><th>Estado</th><th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Valor</th><th>Fila</th></tr></thead>
+      <thead><tr><th>Estado</th><th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Valor</th><th>Fila</th><th>Nota</th></tr></thead>
       <tbody>
         ${items.map(x => {
           const m = x[source];
-          return `<tr><td>${badge(x.status)}</td>${movementCells(m)}<td>${m?.rowNumber || '—'}</td></tr>`;
+          const note = mode === 'expenses'
+            ? 'Gasto propio del uso de la cuenta. Validar si ya está registrado o agrupado en contabilidad.'
+            : '';
+          return `<tr><td>${badge(x.status)}</td>${movementCells(m)}<td>${m?.rowNumber || '—'}</td><td>${note}</td></tr>`;
         }).join('')}
       </tbody>
     </table>`;
@@ -315,12 +387,23 @@ function renderSingleTable(items, source) {
 function renderTab() {
   const r = state.result.result;
   const tab = state.activeTab;
-  if (tab === 'inconsistencies') tabContent.innerHTML = renderInconsistencies();
+  if (tab === 'reviewFirst') tabContent.innerHTML = renderReviewRows(
+    buildCriticalRows(),
+    'Revisar primero: partidas de alto valor o alto impacto.',
+    'Esta es la lista prioritaria. La idea es que la secretaria no revise todo, sino que empiece por lo que puede afectar el cierre.'
+  );
+  if (tab === 'confirm') tabContent.innerHTML = renderReviewRows(
+    buildConfirmRows(),
+    'Confirmar sugerencias de conciliación.',
+    'La app encontró posibles coincidencias. Solo requieren aprobar o rechazar.'
+  );
+  if (tab === 'minor') tabContent.innerHTML = renderReviewRows(
+    buildMinorRows(),
+    'Pendientes menores o agrupables.',
+    'No son la primera prioridad. Revisar después de las partidas críticas.'
+  );
   if (tab === 'matches') tabContent.innerHTML = renderMatchTable(r.matches || []);
-  if (tab === 'probable') tabContent.innerHTML = renderMatchTable(r.probable || []);
-  if (tab === 'bankOnly') tabContent.innerHTML = renderSingleTable(r.bankOnly || [], 'bank');
-  if (tab === 'internalOnly') tabContent.innerHTML = renderSingleTable(r.internalOnly || [], 'internal');
-  if (tab === 'bankExpenses') tabContent.innerHTML = renderSingleTable(r.bankExpenses || [], 'bank');
+  if (tab === 'bankExpenses') tabContent.innerHTML = renderSingleTable(r.bankExpenses || [], 'bank', 'expenses');
   if (tab === 'diagnostics') tabContent.innerHTML = renderDiagnostics();
 }
 

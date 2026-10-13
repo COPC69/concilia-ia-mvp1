@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Concilia IA | MVP 1</title>
+  <title>Concilia IA | MVP 1.6</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -11,9 +11,9 @@
     <div>
       <p class="eyebrow">BEGINN AI SOLUTIONS · MICRO APP</p>
       <h1>Concilia IA</h1>
-      <p class="subtitle">Cruza un archivo contable, administrativo o manual contra un extracto bancario y detecta qué cuadra, qué falta y qué debe revisarse.</p>
+      <p class="subtitle">Carga tu archivo contable y tu extracto bancario. La app cruza movimientos y te muestra primero lo que realmente debes revisar.</p>
     </div>
-    <div class="badge">MVP 1</div>
+    <div class="badge">MVP 1.6</div>
   </header>
 
   <main class="container">
@@ -21,24 +21,8 @@
       <div class="section-title">
         <span>1</span>
         <div>
-          <h2>Conectar backend Render</h2>
-          <p>Pega la URL de tu API en Render. Ejemplo: https://concilia-ia-api.onrender.com</p>
-        </div>
-      </div>
-      <div class="inline-form">
-        <input id="apiUrl" type="url" placeholder="https://tu-api.onrender.com" />
-        <button id="saveApiBtn" class="secondary">Guardar URL</button>
-        <button id="testApiBtn">Probar backend</button>
-      </div>
-      <p id="apiStatus" class="status muted">Backend sin probar.</p>
-    </section>
-
-    <section class="card">
-      <div class="section-title">
-        <span>2</span>
-        <div>
           <h2>Subir archivos</h2>
-          <p>El extracto bancario es obligatorio. El archivo interno es opcional.</p>
+          <p>El extracto bancario es obligatorio. El archivo interno puede venir de CONTAI, Excel manual, FincaControl u otra plataforma contable.</p>
         </div>
       </div>
 
@@ -58,20 +42,27 @@
         </label>
       </div>
 
-      <div class="options">
-        <label>
-          Tolerancia valor
-          <input id="amountTolerance" type="number" value="2" min="0" step="1" />
-        </label>
-        <label>
-          Días cercanos
-          <input id="daysWindow" type="number" value="3" min="0" step="1" />
-        </label>
-        <label>
-          Puntaje probable mínimo
-          <input id="minScore" type="number" value="72" min="0" max="100" step="1" />
-        </label>
-      </div>
+      <details class="advanced-options">
+        <summary>Opciones avanzadas</summary>
+        <div class="options">
+          <label>
+            Tolerancia valor
+            <input id="amountTolerance" type="number" value="2" min="0" step="1" />
+          </label>
+          <label>
+            Días cercanos
+            <input id="daysWindow" type="number" value="3" min="0" step="1" />
+          </label>
+          <label>
+            Puntaje probable mínimo
+            <input id="minScore" type="number" value="72" min="0" max="100" step="1" />
+          </label>
+          <label>
+            Umbral revisión prioritaria
+            <input id="criticalThreshold" type="number" value="1000000" min="0" step="100000" />
+          </label>
+        </div>
+      </details>
 
       <div class="actions">
         <button id="reconcileBtn">Conciliar archivos</button>
@@ -82,13 +73,14 @@
 
     <section id="resultsSection" class="card hidden">
       <div class="section-title">
-        <span>3</span>
+        <span>2</span>
         <div>
           <h2>Resultado de conciliación</h2>
-          <p>Primera vista: inconsistencias para revisión. Luego puedes consultar conciliados, probables, gastos bancarios y diagnóstico.</p>
+          <p id="resultsSubtitle">Primero verás las partidas que requieren atención. Lo conciliado queda como respaldo, no como tarea.</p>
         </div>
       </div>
 
+      <div id="resultMessage" class="result-message"></div>
       <div id="summaryGrid" class="summary-grid"></div>
 
       <div class="toolbar">
@@ -97,21 +89,31 @@
       </div>
 
       <div class="tabs">
-        <button class="tab active" data-tab="inconsistencies">Inconsistencias</button>
-        <button class="tab" data-tab="matches">Conciliados</button>
-        <button class="tab" data-tab="probable">Probables</button>
-        <button class="tab" data-tab="bankOnly">Banco sin registro</button>
-        <button class="tab" data-tab="internalOnly">Interno sin banco</button>
+        <button class="tab active" data-tab="reviewFirst">Revisar primero</button>
+        <button class="tab" data-tab="confirm">Confirmar</button>
+        <button class="tab" data-tab="minor">Pendientes menores</button>
         <button class="tab" data-tab="bankExpenses">Gastos bancarios</button>
+        <button class="tab" data-tab="matches">Conciliados</button>
         <button class="tab" data-tab="diagnostics">Diagnóstico</button>
       </div>
 
       <div id="tabContent" class="table-wrap"></div>
     </section>
+
+    <details class="card tech-card">
+      <summary>Configuración técnica</summary>
+      <p class="muted">Esta sección es solo para implementación. La secretaria no necesita usarla.</p>
+      <div class="inline-form">
+        <input id="apiUrl" type="url" placeholder="https://concilia-ia-api.onrender.com" />
+        <button id="saveApiBtn" class="secondary">Guardar URL</button>
+        <button id="testApiBtn">Probar backend</button>
+      </div>
+      <p id="apiStatus" class="status muted">Backend sin probar.</p>
+    </details>
   </main>
 
   <footer>
-    <p>Concilia IA · MVP 1 · Frontend Netlify + Backend Render</p>
+    <p>Concilia IA · MVP 1.6 · Frontend Netlify + Backend Render</p>
   </footer>
 
   <script src="./app.js"></script>
