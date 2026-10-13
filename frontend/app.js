@@ -289,7 +289,7 @@ function buildCriticalRows() {
     tipo: 'Banco sin registro interno',
     origen: 'Banco',
     movimiento: x.bank,
-    accion: 'Revisar si falta contabilizar, si pertenece a otra cuenta, si es personal o si está agrupado en CONTAI.'
+    accion: 'Revisar solo si no aparece una coincidencia sugerida. Si existe un registro interno del mismo valor y fecha equivalente, aprobarlo; la descripción del banco puede ser genérica.'
   }));
 
   parts.criticalInternal.forEach(x => rows.push({
@@ -297,7 +297,7 @@ function buildCriticalRows() {
     tipo: 'Interno sin movimiento bancario',
     origen: 'Archivo interno',
     movimiento: x.internal,
-    accion: 'Revisar si el registro contable pasó por otra cuenta, otro periodo o si debe reversarse/corregirse.'
+    accion: 'Revisar solo si no aparece un movimiento bancario equivalente. Si el valor coincide y la fecha está invertida por formato, aprobar la sugerencia.'
   }));
 
   rows.sort((a, b) => getMovementValue(b.movimiento) - getMovementValue(a.movimiento));
@@ -395,7 +395,7 @@ function renderTab() {
   if (tab === 'confirm') tabContent.innerHTML = renderReviewRows(
     buildConfirmRows(),
     'Confirmar sugerencias de conciliación.',
-    'La app encontró posibles coincidencias. Solo requieren aprobar o rechazar.'
+    'La app encontró movimientos que probablemente son el mismo registro aunque la descripción sea distinta o la fecha venga en formato diferente. Solo requieren aprobar o rechazar.'
   );
   if (tab === 'minor') tabContent.innerHTML = renderReviewRows(
     buildMinorRows(),
