@@ -81,3 +81,12 @@ footer { text-align: center; color: var(--muted); padding: 20px; }
   .inline-form, .grid-2, .options, .summary-grid { grid-template-columns: 1fr; }
   .actions, .toolbar { flex-direction: column; }
 }
+
+.diagnostics-note {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  color: #134e4a;
+}

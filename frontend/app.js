@@ -135,10 +135,12 @@ function renderResults() {
     kpi('Banco sin interno', s.bancoSinRegistroInterno ?? 0),
     kpi('Interno sin banco', s.registroInternoSinBanco ?? 0),
     kpi('Gastos bancarios', s.gastosBancariosDetectados ?? s.bankExpenses ?? 0),
+    kpi('Gastos bancarios agrupados', s.gastosBancariosAgrupados ?? 0),
     kpi('Neto banco', formatMoney(s.totalNetoBanco ?? 0)),
     kpi('Neto interno', formatMoney(s.totalNetoInterno ?? 0)),
     kpi('Diferencia neta', formatMoney(s.diferenciaNeta ?? 0)),
-    kpi('% banco conciliado', `${s.porcentajeBancoConciliado ?? 0}%`)
+    kpi('% banco conciliado', `${s.porcentajeBancoConciliado ?? 0}%`),
+    kpi('% interno conciliado', `${s.porcentajeInternoConciliado ?? 0}%`)
   ].join('');
 
   document.querySelectorAll('.tab').forEach(btn => {
@@ -187,6 +189,33 @@ function renderMatchTable(items) {
     </table>`;
 }
 
+function renderDiagnostics() {
+  if (!state.result) return '<p class="muted">No hay diagnóstico disponible.</p>';
+  const s = state.result.result.summary || {};
+  const d = state.result.result.diagnostics || {};
+  const rows = [
+    ['Ingresos banco', d.totalIngresosBanco ?? s.totalIngresosBanco],
+    ['Egresos banco', d.totalEgresosBanco ?? s.totalEgresosBanco],
+    ['Neto banco', d.totalNetoBanco ?? s.totalNetoBanco],
+    ['Ingresos interno', d.totalIngresosInterno ?? s.totalIngresosInterno],
+    ['Egresos interno', d.totalEgresosInterno ?? s.totalEgresosInterno],
+    ['Neto interno', d.totalNetoInterno ?? s.totalNetoInterno],
+    ['Diferencia neta', d.diferenciaNeta ?? s.diferenciaNeta],
+    ['Gastos bancarios ingresos banco', d.gastosBancariosIngresosBanco],
+    ['Gastos bancarios egresos banco', d.gastosBancariosEgresosBanco],
+    ['Gastos bancarios neto banco', d.gastosBancariosNetoBanco ?? s.gastosBancariosNetoBanco]
+  ].filter(([_, v]) => v !== undefined && v !== null);
+
+  return `
+    <div class="diagnostics-note">
+      <strong>Lectura de control:</strong> estos totales sirven para validar si los dos archivos fueron interpretados correctamente antes de revisar movimientos uno a uno.
+    </div>
+    <table>
+      <thead><tr><th>Concepto</th><th>Valor</th></tr></thead>
+      <tbody>${rows.map(([label, value]) => `<tr><td>${label}</td><td>${formatMoney(value)}</td></tr>`).join('')}</tbody>
+    </table>`;
+}
+
 function renderSingleTable(items, source) {
   if (!items.length) return '<p class="muted">No hay registros en esta categoría.</p>';
   return `
@@ -209,6 +238,7 @@ function renderTab() {
   if (tab === 'bankOnly') tabContent.innerHTML = renderSingleTable(r.bankOnly || [], 'bank');
   if (tab === 'internalOnly') tabContent.innerHTML = renderSingleTable(r.internalOnly || [], 'internal');
   if (tab === 'bankExpenses') tabContent.innerHTML = renderSingleTable(r.bankExpenses || [], 'bank');
+  if (tab === 'diagnostics') tabContent.innerHTML = renderDiagnostics();
 }
 
 document.querySelectorAll('.tab').forEach(btn => {
@@ -246,6 +276,7 @@ function flattenRows() {
   (r.probable || []).forEach(addMatch);
   (r.bankOnly || []).forEach(x => rows.push({ categoria: x.status, fecha_banco: x.bank?.date || '', descripcion_banco: x.bank?.description || '', tipo_banco: x.bank?.type || '', valor_banco: x.bank?.value || '' }));
   (r.internalOnly || []).forEach(x => rows.push({ categoria: x.status, fecha_interno: x.internal?.date || '', descripcion_interno: x.internal?.description || '', tipo_interno: x.internal?.type || '', valor_interno: x.internal?.value || '' }));
+  (r.bankExpenses || []).forEach(x => rows.push({ categoria: x.status, fecha_banco: x.bank?.date || '', descripcion_banco: x.bank?.description || '', tipo_banco: x.bank?.type || '', valor_banco: x.bank?.value || '' }));
   return rows;
 }
 
