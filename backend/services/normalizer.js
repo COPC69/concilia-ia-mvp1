@@ -33,7 +33,7 @@ function parseNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseDate(value) {
+function parseDate(value, fallbackYear = null) {
   if (!value) return null;
   if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
 
@@ -52,6 +52,13 @@ function parseDate(value) {
   if (latam) {
     const [, d, m, y] = latam;
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+
+  // Extractos Bancolombia suelen traer fechas tipo d/mm sin año. Usar año inferido.
+  const noYear = s.match(/^(\d{1,2})[-/](\d{1,2})$/);
+  if (noYear && fallbackYear) {
+    const [, d, m] = noYear;
+    return `${fallbackYear}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
   const d = new Date(s);
@@ -102,7 +109,7 @@ function normalizeDataset(parsed, { role }) {
   for (const row of sheet.rows) {
     if (isTotalOrHeaderLike(row)) continue;
 
-    const date = parseDate(row[mapping.date]);
+    const date = parseDate(row[mapping.date], row.__defaultYear || sheet.defaultYear || null);
     const description = String(row[mapping.description] ?? '').trim();
     const reference = mapping.reference ? String(row[mapping.reference] ?? '').trim() : '';
     const balance = mapping.balance ? parseNumber(row[mapping.balance]) : null;
