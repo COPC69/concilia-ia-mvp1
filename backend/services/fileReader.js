@@ -79,7 +79,7 @@ function findHeaderRow(rows, role) {
 }
 
 function detectDefaultYear(rows) {
-  for (const row of rows.slice(0, 100)) {
+  for (const row of rows.slice(0, 120)) {
     for (const cell of row || []) {
       const text = String(cell ?? '');
       const match = text.match(/(20\d{2}|19\d{2})/);
@@ -87,6 +87,57 @@ function detectDefaultYear(rows) {
     }
   }
   return null;
+}
+
+function monthNameToNumber(text) {
+  const t = normalizeText(text);
+  const months = [
+    ['enero', 'ene', 'jan', 'january'],
+    ['febrero', 'feb', 'february'],
+    ['marzo', 'mar', 'march'],
+    ['abril', 'abr', 'apr', 'april'],
+    ['mayo', 'may'],
+    ['junio', 'jun', 'june'],
+    ['julio', 'jul', 'july'],
+    ['agosto', 'ago', 'aug', 'august'],
+    ['septiembre', 'setiembre', 'sep', 'sept', 'september'],
+    ['octubre', 'oct', 'october'],
+    ['noviembre', 'nov', 'november'],
+    ['diciembre', 'dic', 'dec', 'december']
+  ];
+  for (let i = 0; i < months.length; i++) {
+    if (months[i].some(m => t.includes(m))) return i + 1;
+  }
+  return null;
+}
+
+function detectDefaultMonth(rows) {
+  const votes = new Map();
+  const add = (m, weight = 1) => {
+    const n = Number(m);
+    if (n >= 1 && n <= 12) votes.set(n, (votes.get(n) || 0) + weight);
+  };
+
+  for (const row of rows.slice(0, 140)) {
+    for (const cell of row || []) {
+      const text = String(cell ?? '').trim();
+      if (!text) continue;
+
+      const named = monthNameToNumber(text);
+      if (named) add(named, 5);
+
+      // yyyy/mm/dd o yyyy-mm-dd
+      let m = text.match(/(?:19|20)\d{2}[-/](\d{1,2})[-/]\d{1,2}/);
+      if (m) add(m[1], 3);
+
+      // mm/dd/yyyy en exportaciones Excel de algunos auxiliares contables.
+      m = text.match(/^(\d{1,2})[-/]\d{1,2}[-/](?:19|20)\d{2}$/);
+      if (m) add(m[1], 1);
+    }
+  }
+
+  if (!votes.size) return null;
+  return [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
 function isBankMovementHeader(row) {
@@ -110,6 +161,7 @@ function sheetToStructuredRows(ws, sheetName, role) {
 
   const cleanedRows = rows.map(r => (r || []).map(safeCell));
   const defaultYear = detectDefaultYear(cleanedRows);
+  const defaultMonth = detectDefaultMonth(cleanedRows);
 
   if (role === 'bank') {
     const headerIndex = findHeaderRow(cleanedRows, role);
@@ -134,7 +186,7 @@ function sheetToStructuredRows(ws, sheetName, role) {
         if (!(looksLikeDateNoYear(dateCell) || looksLikeDateWithYear(dateCell))) continue;
         if (!looksLikeMoney(valueCell)) continue;
 
-        const obj = { __rowNumber: idx + 1, __defaultYear: defaultYear };
+        const obj = { __rowNumber: idx + 1, __defaultYear: defaultYear, __defaultMonth: defaultMonth };
         headers.forEach((h, colIdx) => { obj[h] = row[colIdx] ?? ''; });
         dataRows.push(obj);
       }
@@ -145,6 +197,7 @@ function sheetToStructuredRows(ws, sheetName, role) {
         headerRowIndex: headerIndex,
         headers,
         defaultYear,
+        defaultMonth,
         preview: dataRows.slice(0, 5)
       };
     }
@@ -159,7 +212,7 @@ function sheetToStructuredRows(ws, sheetName, role) {
   const dataRows = cleanedRows.slice(headerRowIndex + 1)
     .filter(r => !isLikelyEmptyRow(r))
     .map((row, rowIndex) => {
-      const obj = { __rowNumber: headerRowIndex + 2 + rowIndex, __defaultYear: defaultYear };
+      const obj = { __rowNumber: headerRowIndex + 2 + rowIndex, __defaultYear: defaultYear, __defaultMonth: defaultMonth };
       headers.forEach((h, idx) => { obj[h] = row[idx] ?? ''; });
       return obj;
     });
@@ -170,6 +223,7 @@ function sheetToStructuredRows(ws, sheetName, role) {
     headerRowIndex,
     headers,
     defaultYear,
+    defaultMonth,
     preview: dataRows.slice(0, 5)
   };
 }
