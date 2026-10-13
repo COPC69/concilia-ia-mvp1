@@ -139,8 +139,11 @@ function normalizeDataset(parsed, { role }) {
       type = amount < 0 ? 'egreso' : 'ingreso';
     }
 
-    if (!date && rawValue === 0 && !description) continue;
+    // No aceptar totales o filas de cierre sin fecha. En CONTAI la fila total trae
+    // Débitos/Créditos pero no fecha ni detalle, y duplicaba el neto interno.
+    if (!date) continue;
     if (rawValue === 0) continue;
+    if (role === 'internal' && !description) continue;
 
     const movement = {
       id: `${role.toUpperCase()}-${String(sequence++).padStart(5, '0')}`,

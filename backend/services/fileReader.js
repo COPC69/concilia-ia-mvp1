@@ -18,6 +18,21 @@ function safeCell(value) {
   return String(value).trim();
 }
 
+function looksLikeDateNoYear(value) {
+  return /^\d{1,2}[\/-]\d{1,2}$/.test(String(value ?? '').trim());
+}
+
+function looksLikeDateWithYear(value) {
+  return /^(\d{1,2}[\/-]\d{1,2}[\/-](19|20)\d{2})$|^((19|20)\d{2}[\/-]\d{1,2}[\/-]\d{1,2})$/.test(String(value ?? '').trim());
+}
+
+function looksLikeMoney(value) {
+  const s = String(value ?? '').trim();
+  if (!s) return false;
+  if (/^#/.test(s)) return false;
+  return /^-?\$?\s*[\d.,]+$/.test(s);
+}
+
 function keywordScore(row, role) {
   const text = normalizeText(row.join(' | '));
   let score = 0;
@@ -33,11 +48,8 @@ function keywordScore(row, role) {
 }
 
 function findHeaderRow(rows, role) {
-  // Caso especial para extractos Bancolombia: puede haber una fila de resumen
-  // con SALDO ANTERIOR/TOTAL ABONOS/TOTAL CARGOS antes de los movimientos.
-  // Esa fila NO debe usarse como encabezado de movimientos.
   if (role === 'bank') {
-    const limit = Math.min(rows.length, 80);
+    const limit = Math.min(rows.length, 100);
     for (let i = 0; i < limit; i++) {
       const rowText = normalizeText((rows[i] || []).join(' | '));
       if (
@@ -54,7 +66,7 @@ function findHeaderRow(rows, role) {
   }
 
   let best = { index: 0, score: -1 };
-  const limit = Math.min(rows.length, 40);
+  const limit = Math.min(rows.length, 60);
   for (let i = 0; i < limit; i++) {
     const row = rows[i] || [];
     if (isLikelyEmptyRow(row)) continue;
@@ -67,8 +79,7 @@ function findHeaderRow(rows, role) {
 }
 
 function detectDefaultYear(rows) {
-  // Busca un año explícito en DESDE/HASTA u otras celdas del encabezado.
-  for (const row of rows.slice(0, 80)) {
+  for (const row of rows.slice(0, 100)) {
     for (const cell of row || []) {
       const text = String(cell ?? '');
       const match = text.match(/(20\d{2}|19\d{2})/);
@@ -86,7 +97,7 @@ function isBankMovementHeader(row) {
 function isNonMovementBankRow(row) {
   const text = normalizeText((row || []).join(' | '));
   if (!text) return true;
-  return /informacion cliente|informacion general|cliente\s*\||direccion|desde\s*\||hasta\s*\||tipo cuenta|resumen|saldo anterior|movimientos:|fin estado de cuenta/.test(text);
+  return /informacion cliente|informacion general|cliente\s*\||direccion|desde\s*\||hasta\s*\||tipo cuenta|resumen|saldo anterior|total abonos|total cargos|movimientos:|fin estado de cuenta/.test(text);
 }
 
 function sheetToStructuredRows(ws, sheetName, role) {
@@ -100,20 +111,28 @@ function sheetToStructuredRows(ws, sheetName, role) {
   const cleanedRows = rows.map(r => (r || []).map(safeCell));
   const defaultYear = detectDefaultYear(cleanedRows);
 
-  // Caso especial Bancolombia: el extracto repite secciones de información y la
-  // cabecera FECHA/DESCRIPCIÓN/VALOR varias veces. Se consolida solo el bloque de movimientos.
   if (role === 'bank') {
     const headerIndex = findHeaderRow(cleanedRows, role);
     const headerRow = cleanedRows[headerIndex] || [];
     if (isBankMovementHeader(headerRow)) {
       const headers = headerRow.map((h, idx) => safeCell(h) || `Columna ${idx + 1}`);
+      const dateIndex = headers.findIndex(h => normalizeText(h).includes('fecha'));
+      const valueIndex = headers.findIndex(h => normalizeText(h) === 'valor' || normalizeText(h).includes('valor'));
       const dataRows = [];
 
       for (let idx = headerIndex + 1; idx < cleanedRows.length; idx++) {
         const row = cleanedRows[idx] || [];
         if (isLikelyEmptyRow(row)) continue;
-        if (isBankMovementHeader(row)) continue; // cabecera repetida en otra página
+        if (isBankMovementHeader(row)) continue;
         if (isNonMovementBankRow(row)) continue;
+
+        // En extractos Bancolombia reales, un movimiento válido debe tener fecha y valor.
+        // Esto evita leer encabezados de página, saldos y bloques informativos como movimientos,
+        // sin perder pagos grandes como PAGO DE TERC NESTLE.
+        const dateCell = row[dateIndex >= 0 ? dateIndex : 0];
+        const valueCell = row[valueIndex >= 0 ? valueIndex : 4];
+        if (!(looksLikeDateNoYear(dateCell) || looksLikeDateWithYear(dateCell))) continue;
+        if (!looksLikeMoney(valueCell)) continue;
 
         const obj = { __rowNumber: idx + 1, __defaultYear: defaultYear };
         headers.forEach((h, colIdx) => { obj[h] = row[colIdx] ?? ''; });
