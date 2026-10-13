@@ -1,7 +1,7 @@
 const state = {
   apiBaseUrl: localStorage.getItem('concilia_api_url') || '',
   result: null,
-  activeTab: 'matches'
+  activeTab: 'inconsistencies'
 };
 
 const $ = (id) => document.getElementById(id);
@@ -106,7 +106,7 @@ $('reconcileBtn').addEventListener('click', async () => {
     if (!res.ok || !data.ok) throw new Error(data.error || 'Error procesando conciliación.');
 
     state.result = data;
-    state.activeTab = 'matches';
+    state.activeTab = 'inconsistencies';
     renderResults();
     setStatus(processStatus, 'Conciliación procesada correctamente.', 'ok');
   } catch (err) {
@@ -126,21 +126,23 @@ function renderResults() {
   const s = state.result.result.summary;
   resultsSection.classList.remove('hidden');
 
+  const inconsistenciasCriticas = (s.bancoSinRegistroInterno ?? 0) + (s.registroInternoSinBanco ?? 0);
+  const inconsistenciasRevision = inconsistenciasCriticas + (s.coincidenciasProbables ?? 0) + (s.gastosBancariosDetectados ?? s.bankExpenses ?? 0);
+
   summaryGrid.innerHTML = [
-    kpi('Modo', state.result.mode === 'conciliacion_completa' ? 'Completa' : 'Solo banco'),
+    kpi('Inconsistencias a revisar', inconsistenciasRevision),
+    kpi('Banco sin registro interno', s.bancoSinRegistroInterno ?? 0),
+    kpi('Interno sin banco', s.registroInternoSinBanco ?? 0),
+    kpi('Coincidencias por aprobar', s.coincidenciasProbables ?? 0),
+    kpi('Gastos bancarios detectados', s.gastosBancariosDetectados ?? s.bankExpenses ?? 0),
+    kpi('Diferencia neta', formatMoney(s.diferenciaNeta ?? 0)),
+    kpi('Conciliados exactos', s.conciliadosExactos ?? 0),
+    kpi('% banco conciliado', `${s.porcentajeBancoConciliado ?? 0}%`),
+    kpi('% interno conciliado', `${s.porcentajeInternoConciliado ?? 0}%`),
     kpi('Mov. banco', s.bankMovements ?? 0),
     kpi('Registros internos', s.internalMovements ?? 0),
-    kpi('Conciliados exactos', s.conciliadosExactos ?? 0),
-    kpi('Probables', s.coincidenciasProbables ?? 0),
-    kpi('Banco sin interno', s.bancoSinRegistroInterno ?? 0),
-    kpi('Interno sin banco', s.registroInternoSinBanco ?? 0),
-    kpi('Gastos bancarios', s.gastosBancariosDetectados ?? s.bankExpenses ?? 0),
-    kpi('Gastos bancarios agrupados', s.gastosBancariosAgrupados ?? 0),
     kpi('Neto banco', formatMoney(s.totalNetoBanco ?? 0)),
-    kpi('Neto interno', formatMoney(s.totalNetoInterno ?? 0)),
-    kpi('Diferencia neta', formatMoney(s.diferenciaNeta ?? 0)),
-    kpi('% banco conciliado', `${s.porcentajeBancoConciliado ?? 0}%`),
-    kpi('% interno conciliado', `${s.porcentajeInternoConciliado ?? 0}%`)
+    kpi('Neto interno', formatMoney(s.totalNetoInterno ?? 0))
   ].join('');
 
   document.querySelectorAll('.tab').forEach(btn => {
@@ -184,6 +186,86 @@ function renderMatchTable(items) {
             ${movementCells(x.bank)}
             ${movementCells(x.internal)}
             <td>${formatMoney(x.amountDiff || 0)}</td><td>${x.dateDiff ?? '—'}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function buildInconsistencyRows() {
+  if (!state.result) return [];
+  const r = state.result.result;
+  const rows = [];
+
+  (r.bankOnly || [])
+    .filter(x => x.status !== 'gasto_bancario_detectado')
+    .forEach(x => rows.push({
+      prioridad: 'Alta',
+      tipo: 'Movimiento bancario sin registro interno',
+      origen: 'Banco',
+      movimiento: x.bank,
+      accion: 'Revisar si falta contabilizar, si es personal, duplicado o si pertenece a otro periodo.'
+    }));
+
+  (r.internalOnly || []).forEach(x => rows.push({
+    prioridad: 'Alta',
+    tipo: 'Registro interno sin movimiento bancario',
+    origen: 'Archivo interno',
+    movimiento: x.internal,
+    accion: 'Revisar si fue registrado en CONTAI pero no pasó por Bancolombia, si está en otra cuenta o si es error contable.'
+  }));
+
+  (r.probable || []).forEach(x => rows.push({
+    prioridad: 'Media',
+    tipo: 'Coincidencia probable por aprobar',
+    origen: 'Banco + interno',
+    movimiento: x.bank,
+    interno: x.internal,
+    score: x.score,
+    accion: 'Aprobar o rechazar la coincidencia sugerida.'
+  }));
+
+  (r.bankExpenses || [])
+    .filter(x => x.status === 'gasto_bancario_detectado')
+    .forEach(x => rows.push({
+      prioridad: 'Media',
+      tipo: 'Gasto bancario detectado',
+      origen: 'Banco',
+      movimiento: x.bank,
+      accion: 'Validar si debe registrarse como gasto bancario o si ya está agrupado en contabilidad.'
+    }));
+
+  const order = { Alta: 1, Media: 2, Baja: 3 };
+  rows.sort((a, b) => (order[a.prioridad] || 9) - (order[b.prioridad] || 9));
+  return rows;
+}
+
+function renderInconsistencies() {
+  const rows = buildInconsistencyRows();
+  if (!rows.length) {
+    return '<div class="success-panel"><strong>No se encontraron inconsistencias pendientes.</strong><br>Los archivos quedaron conciliados según las reglas actuales.</div>';
+  }
+
+  return `
+    <div class="priority-panel">
+      <strong>Primero revisar estas inconsistencias.</strong><br>
+      Esta es la bandeja principal de trabajo: movimientos del banco sin soporte interno, registros internos sin banco, coincidencias por aprobar y gastos bancarios detectados.
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Prioridad</th><th>Tipo de inconsistencia</th><th>Origen</th><th>Fecha</th><th>Descripción</th><th>Valor</th><th>Acción sugerida</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(x => `
+          <tr>
+            <td><span class="priority ${x.prioridad.toLowerCase()}">${x.prioridad}</span></td>
+            <td>${x.tipo}${x.score ? `<br><small>Score: ${x.score}</small>` : ''}</td>
+            <td>${x.origen}</td>
+            <td>${formatDate(x.movimiento?.date)}</td>
+            <td>${x.movimiento?.description || '—'}${x.interno ? `<br><small>Interno sugerido: ${x.interno.description || '—'} · ${formatMoney(x.interno.value)}</small>` : ''}</td>
+            <td>${formatMoney(x.movimiento?.value || 0)}</td>
+            <td>${x.accion}</td>
           </tr>`).join('')}
       </tbody>
     </table>`;
@@ -233,6 +315,7 @@ function renderSingleTable(items, source) {
 function renderTab() {
   const r = state.result.result;
   const tab = state.activeTab;
+  if (tab === 'inconsistencies') tabContent.innerHTML = renderInconsistencies();
   if (tab === 'matches') tabContent.innerHTML = renderMatchTable(r.matches || []);
   if (tab === 'probable') tabContent.innerHTML = renderMatchTable(r.probable || []);
   if (tab === 'bankOnly') tabContent.innerHTML = renderSingleTable(r.bankOnly || [], 'bank');
